@@ -1,0 +1,204 @@
+<project name="check out from SVN use ant" default="obfuscate">
+
+	<!-- define the svn url and the local directory to be checked out -->
+
+	<property file="build.properties" />
+
+	<property name="ant_home" value="ant_lib"></property>
+	<property name="proguard.dir" value="proguard_lib"></property>
+
+
+	<path id="svnant.classpath">
+		<fileset dir="${ant_home}">
+			<include name="**/*.jar" />
+		</fileset>
+	</path>
+
+	<!-- importing taskdef -->
+	<taskdef resource="net/sf/antcontrib/antlib.xml">
+		<classpath refid="svnant.classpath"></classpath>
+	</taskdef>
+
+	<typedef resource="org/tigris/subversion/svnant/svnantlib.xml"
+		classpathref="svnant.classpath" />
+
+	<!-- prepare for the checking out:clean the directory -->
+	<target name="prepare" description="Prepare the dirs for the task">
+		<delete file="libraryjars.txt" />
+		<delete dir="${local.dir}" />
+		<delete dir="${plugin.outjar.dir}" />
+		<delete dir="${reference.outjar.dir}" />
+
+		<mkdir dir="${local.dir}" />
+
+	</target>
+
+	<svnSetting id="svn.settings" svnkit="true" javahl="false"
+		username="${svn.username}" password="${svn.password}" />
+
+	<input message="select one online_sdk,leisure_sdk,sns_sdk?"
+		addproperty="input_number" validargs="online,leisure,sns" />
+
+	<!-- check out the scource from the svn -->
+	<target name="checkout" depends="prepare">
+
+		<property file="plugin_config_${input_number}.properties"
+			prefix="v2plugin." />
+		<propertyselector property="plugins" match="v2plugin\.(.*)"
+			select="\1" />
+
+		<property file="plugin_config_${input_number}.properties" />
+
+		<for list="${plugins}" param="plugin">
+			<sequential>
+				<!-- <echo message="key:@{plugin} , value:${@{plugin}}" /> -->
+
+				<propertyregex property="@{plugin}_r1" input="${@{plugin}}"
+					regexp="([^\,]*)\,([^\,]*)" select="\1" casesensitive="false" />
+				<propertyregex property="@{plugin}_r2" input="${@{plugin}}"
+					regexp="([^\,]*)\,([^\,]*)" select="\2" casesensitive="false" />
+
+				<var name="svn_version" value="${@{plugin}_r1}" />
+				<var name="svn_url" value="${@{plugin}_r2}" />				
+
+				<svn refid="svn.settings">
+					<export srcUrl="${svn_url}" destPath="${local.dir}/@{plugin}"
+						revision="${svn_version}" />
+					<!-- <checkout url="${@{plugin}}" destPath="${local.dir}/@{plugin}" 
+						/> -->
+				</svn>
+				<delete dir="${local.dir}/@{plugin}/bin" />
+				<echo
+					message="export ${svn_url} version: ${svn_version} 
+					to ${local.dir}/@{plugin} success" />
+
+				<xmlproperty file="${local.dir}/@{plugin}/.project"
+					prefix="@{plugin}_eclipse_project" />
+				<!-- <echo message="${@{plugin}_eclipse_project.projectDescription.name}" 
+					/> -->
+				<!-- 修改工程名 -->
+				<replaceregexp byline="false">
+					<regexp pattern="(\x3Cname\x3E).*(\x3C/name\x3E)" />
+					<substitution expression="\1@{plugin}\2" />
+					<fileset file="${local.dir}/@{plugin}/.project" />
+				</replaceregexp>
+				<propertyfile file="${local.dir}/@{plugin}/project.properties">
+					<entry key="target" value="${android.target.level}" />
+					<entry key="android.library" value="true" />
+				</propertyfile>
+				<!-- 清除所有引用值 -->
+				<replaceregexp byline="false" flags="g">
+
+					<regexp pattern="android.library.reference.*=*" />
+					<substitution expression="" />
+					<fileset file="${local.dir}/@{plugin}/project.properties" />
+				</replaceregexp>
+			</sequential>
+		</for>
+	</target>
+
+	<target name="create_all_project">
+
+		<property file="plugin_config_${input_number}.properties"
+			prefix="v2plugin." />
+		<propertyselector property="plugins" match="v2plugin\.(.*)"
+			select="\1" />
+
+		<property file="plugin_config_${input_number}.properties" />
+
+		<mkdir dir="${local.dir}/AllProject" />
+		<exec dir="${local.dir}/AllProject" executable="${os.batch_commond}"
+			failonerror="true">
+			<arg
+				line="/c &quot;${ANDROID_SDK_PATH}/tools/android create lib-project -n AllProject --package com._idreamsky  -t ${android.target.level} --path .&quot;" />
+		</exec>
+		<!-- 拷入所有SRC和LIB -->
+		<for list="${plugins}" param="plugin">
+			<sequential>
+				<copy todir="${local.dir}/AllProject/src">
+					<fileset dir="${local.dir}/@{plugin}/src">
+						<exclude name="**/*.svn" />
+					</fileset>
+				</copy>
+				<copy todir="${local.dir}/AllProject/libs" failonerror="false">
+					<fileset dir="${local.dir}/@{plugin}/libs">
+						<include name="**/*.jar" />
+					</fileset>
+				</copy>
+				<copy todir="${reference.outjar.dir}" failonerror="false">
+					<fileset dir="${local.dir}/@{plugin}/libs">
+						<include name="**/*.jar" />
+					</fileset>
+				</copy>
+			</sequential>
+		</for>
+	</target>
+
+
+	<tstamp>
+		<format property="TODAY_ZH" pattern="yyyyMMddHH" locale="zh" />
+	</tstamp>
+
+	<target name="build_plugin">
+
+		<antcall target="checkout" />
+		<antcall target="create_all_project" />
+
+		<exec dir="${local.dir}/AllProject" executable="${os.batch_commond}"
+			failonerror="true">
+			<arg
+				line="/c &quot;${ANDROID_SDK_PATH}/tools/android update project -t ${android.target.level} -p .&quot;" />
+		</exec>
+
+		<ant antfile="${local.dir}/AllProject/build.xml" dir="${local.dir}/AllProject"
+			target="debug" />
+
+		<!-- 生成最终SDK包 -->
+
+		<!-- <rename src="${local.dir}/AllProject/bin/classes.jar" dest="${sdk.outjar.dir}/${input_number}_sdk_${TODAY_ZH}_lib.jar" 
+			/> -->
+		<move file="${local.dir}/AllProject/bin/classes.jar"
+			tofile="${sdk.outjar.dir}/${input_number}_sdk_${TODAY_ZH}_lib.jar" />
+
+	</target>
+
+	<!-- 混淆JAR -->
+	<target name="obfuscate" depends="build_plugin">
+		<delete file="libraryjars.txt" />
+		<echo file="${sdk.outjar.dir}/mapping/proguard_mapping_${TODAY_ZH}.txt"
+			append="false" />
+		<for param="module.name">
+			<path>
+				<dirset dir="${reference.outjar.dir}" includes="*.jar" />
+				<fileset dir="${reference.outjar.dir}" includes="**/*.jar"></fileset>
+			</path>
+			<sequential>
+				<echo file="libraryjars.txt" append="true"
+					message=" -libraryjars @{module.name} "></echo>
+			</sequential>
+		</for>
+		<property name="ljr" location="libraryjars.txt" />
+		<java jar="${proguard.dir}/proguard.jar" fork="true" failonerror="true"
+			output="${sdk.outjar.dir}/${input_number}_${TODAY_ZH}_proguardlog.txt">
+			<jvmarg value="-Dmaximum.inlined.code.length=32" />
+			<arg value="@sdk_config_${input_number}.pro" />
+			<arg
+				value="-injars ${sdk.outjar.dir}/${input_number}_sdk_${TODAY_ZH}_lib.jar" />
+			<arg
+				value="-outjars ${sdk.outjar.dir}/${input_number}_sdk_${TODAY_ZH}_lib_pro.jar" />
+			<arg
+				value="-printmapping ${sdk.outjar.dir}/mapping/${input_number}_proguard_mapping_${TODAY_ZH}.txt" />
+
+			<arg
+				value="-libraryjars ${ANDROID_SDK_PATH}/platforms/${android.target.level}/android.jar" />
+			<arg value="-libraryjars ${ANDROID_SDK_PATH}/tools/support/annotations.jar" />
+			<arg value="@${ljr}" />
+
+		</java>
+		<delete file="libraryjars.txt" />
+
+	</target>
+
+
+
+</project>
